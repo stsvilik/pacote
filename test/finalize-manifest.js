@@ -3,6 +3,7 @@
 const BB = require('bluebird')
 
 const cacache = require('cacache')
+const npa = require('npm-package-arg')
 const npmlog = require('npmlog')
 const path = require('path')
 const ssri = require('ssri')
@@ -120,10 +121,7 @@ test('fills in shrinkwrap if missing', t => {
     'npm-shrinkwrap.json': sr
   }).then(tarData => {
     tnock(t, OPTS.registry).get('/' + tarballPath).reply(200, tarData)
-    return finalizeManifest(base, {
-      name: base.name,
-      type: 'range'
-    }, OPTS).then(manifest => {
+    return finalizeManifest(base, npa(base.name), OPTS).then(manifest => {
       t.deepEqual(manifest._shrinkwrap, sr, 'shrinkwrap successfully added')
     })
   })
@@ -147,10 +145,7 @@ test('fills in integrity hash if missing', t => {
   }).then(tarData => {
     const integrity = ssri.fromData(tarData, {algorithms: ['sha512']}).toString()
     tnock(t, OPTS.registry).get('/' + tarballPath).reply(200, tarData)
-    return finalizeManifest(base, {
-      name: base.name,
-      type: 'range'
-    }, OPTS).then(manifest => {
+    return finalizeManifest(base, npa(base.name), OPTS).then(manifest => {
       t.deepEqual(manifest._integrity, integrity, 'integrity hash successfully added')
     })
   })
@@ -180,10 +175,7 @@ test('fills in `bin` if `directories.bin` string', t => {
     'foo/my/nope': 'uhhh'
   }).then(tarData => {
     tnock(t, OPTS.registry).get('/' + tarballPath).reply(200, tarData)
-    return finalizeManifest(base, {
-      name: base.name,
-      type: 'range'
-    }, OPTS).then(manifest => {
+    return finalizeManifest(base, npa(base.name), OPTS).then(manifest => {
       t.deepEqual(manifest.bin, {
         'x.js': path.join('foo', 'my', 'bin', 'x.js'),
         'y': path.join('foo', 'my', 'bin', 'y'),
@@ -206,10 +198,7 @@ test('fills in `bin` if original was an array', t => {
     _resolved: OPTS.registry + tarballPath,
     _hasShrinkwrap: false
   }
-  return finalizeManifest(base, {
-    name: base.name,
-    type: 'range'
-  }, OPTS).then(manifest => {
+  return finalizeManifest(base, npa(base.name), OPTS).then(manifest => {
     t.deepEqual(manifest.bin, {
       'bin1': path.join('foo', 'my', 'bin1'),
       'bin2.js': path.join('foo', 'bin2.js')
@@ -236,10 +225,9 @@ test('uses package.json as base if passed null', t => {
     'foo/x': 'x()'
   }).then(tarData => {
     tnock(t, OPTS.registry).get('/' + tarballPath).reply(200, tarData)
-    return finalizeManifest(null, {
-      fetchSpec: OPTS.registry + tarballPath,
-      type: 'remote'
-    }, OPTS).then(manifest => {
+    return finalizeManifest(
+      null, npa(`${base.name}@${OPTS.registry}${tarballPath}`), OPTS
+    ).then(manifest => {
       t.deepEqual(manifest, {
         name: base.name,
         version: base.version,
@@ -281,13 +269,12 @@ test('errors if unable to get a valid default package.json', t => {
     'foo/x': 'x()'
   }).then(tarData => {
     tnock(t, OPTS.registry).get('/' + tarballPath).reply(200, tarData)
-    return finalizeManifest(null, {
-      fetchSpec: OPTS.registry + tarballPath,
-      type: 'remote'
-    }, OPTS).then(manifest => {
+    return finalizeManifest(
+      null, npa(`${base.name}@${OPTS.registry}${tarballPath}`), OPTS
+    ).then(manifest => {
       throw new Error(`Was not supposed to succeed: ${JSON.stringify(manifest)}`)
     }, err => {
-      t.equal(err.code, 'ENOPACKAGEJSON')
+      t.equal(err.code, 'ENOPACKAGEJSON', 'got correct error code')
     })
   })
 })
@@ -305,33 +292,23 @@ test('caches finalized manifests', t => {
     name: base.name,
     version: base.version
   }
-  const opts = Object.create(OPTS)
+  const opts = Object.assign({}, OPTS)
   opts.cache = CACHE
   return makeTarball({
     'package.json': base,
     'npm-shrinkwrap.json': sr
   }).then(tarData => {
     tnock(t, OPTS.registry).get('/' + tarballPath).reply(200, tarData)
-    return finalizeManifest(base, {
-      name: base.name,
-      type: 'range'
-    }, opts).then(manifest1 => {
+    return finalizeManifest(base, npa(base.name), opts).then(manifest1 => {
       base._integrity = manifest1._integrity
       return cacache.ls(CACHE, opts).then(entries => {
-        const promises = []
         Object.keys(entries).forEach(k => {
-          if (!k.match(/^pacote:range-manifest/)) {
-            promises.push(cacache.put(CACHE, k, '', opts))
-          } else {
+          if (k.match(/^pacote:.*-manifest/)) {
             t.ok(true, 'manifest entry exists in cache: ' + k)
           }
         })
-        return BB.all(promises)
       }).then(() => {
-        return finalizeManifest(base, {
-          name: base.name,
-          type: 'range'
-        }, opts)
+        return finalizeManifest(base, npa(base.name), opts)
       }).then(manifest2 => {
         t.deepEqual(manifest2, manifest1, 'got cached manifest')
       })
